@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Solar Position — Zenith &amp; Elevation</title>
+<style>
+  :root{
+    --navy:#16305B; --navy-deep:#0E1F3D; --gold:#E3A81C; --gold-soft:#F0C24B;
+    --orange:#E8792B; --ink:#1C2A3A; --slate:#5A6B85; --card:#F4F6FA; --line:#DCE3EE;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:Calibri,'Segoe UI',system-ui,sans-serif;color:var(--ink);
+       background:#fff;padding:18px;}
+  .wrap{max-width:1100px;margin:0 auto;}
+  h1{font-family:'Century Schoolbook',Georgia,serif;color:var(--navy);margin:0 0 2px;font-size:28px;}
+  .sub{color:var(--slate);font-style:italic;margin:0 0 16px;font-size:16px;}
+  .main{display:flex;flex-wrap:wrap;gap:18px;align-items:stretch;}
+  .left{flex:1 1 560px;min-width:340px;}
+  .right{flex:0 0 330px;display:flex;flex-direction:column;gap:12px;}
+  .stage{width:100%;border:1px solid var(--line);border-radius:12px;overflow:hidden;display:block;background:#000;}
+  .readouts{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .readout{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px;}
+  .readout .lab{font-size:13px;color:var(--slate);text-transform:uppercase;letter-spacing:1px;}
+  .readout .val{font-size:26px;font-weight:bold;color:var(--navy);font-variant-numeric:tabular-nums;}
+  #statusCard .val{font-size:22px;}
+  .controls{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;}
+  button{width:100%;background:var(--navy);color:#fff;border:none;border-radius:8px;padding:12px 18px;
+         font-size:17px;font-weight:bold;cursor:pointer;margin-bottom:12px;}
+  button:hover{background:#1d3d70;}
+  .field{margin:10px 0;}
+  .field .top{display:flex;justify-content:space-between;font-size:14px;margin-bottom:4px;}
+  .field .top b{color:var(--navy);}
+  .field .top span{color:var(--slate);font-variant-numeric:tabular-nums;}
+  input[type=range]{width:100%;accent-color:var(--gold);height:5px;}
+  .note{margin-top:14px;color:var(--slate);font-size:13px;line-height:1.55;}
+  .badge{display:inline-block;padding:2px 10px;border-radius:6px;font-weight:bold;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Solar Position: Zenith &amp; Elevation</h1>
+  <p class="sub">Drag the time slider, or press Play to watch the sun move through the day and night.</p>
+
+  <div class="main">
+    <div class="left">
+      <svg id="stage" class="stage" viewBox="0 0 900 470" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+
+    <div class="right">
+      <div class="readouts">
+        <div class="readout"><div class="lab">Solar time</div><div class="val" id="rTime">12:00</div></div>
+        <div class="readout" id="statusCard"><div class="lab">Status</div><div class="val"><span id="rStatus" class="badge">Day</span></div></div>
+        <div class="readout"><div class="lab">Elevation &alpha;</div><div class="val" id="rElev">0&deg;</div></div>
+        <div class="readout"><div class="lab">Zenith Z</div><div class="val" id="rZen">0&deg;</div></div>
+      </div>
+
+      <div class="controls">
+        <button id="play">▶ Play</button>
+        <div class="field">
+          <div class="top"><b>Time of day</b><span id="timeV">12:00</span></div>
+          <input type="range" id="time" min="0" max="24" step="0.05" value="12">
+        </div>
+        <div class="field">
+          <div class="top"><b>Latitude</b><span id="latV">13.1&deg; N</span></div>
+          <input type="range" id="lat" min="-66" max="66" step="0.5" value="13.1">
+        </div>
+        <div class="field">
+          <div class="top"><b>Day of year</b><span id="dayV">Mar 21</span></div>
+          <input type="range" id="day" min="1" max="365" step="1" value="80">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="note">
+    <b>Zenith (Z)</b> is measured from straight overhead; <b>elevation (&alpha;)</b> from the horizon, with
+    &alpha; = 90&deg; &minus; Z. When the sun drops below the horizon, &alpha; &lt; 0&deg; and Z &gt; 90&deg; — that is night.
+    Elevation and zenith are computed from latitude, day of year, and solar time. Horizontal placement is schematic (morning at left, afternoon at right).
+  </p>
+</div>
+
+<script>
+const SVG="http://www.w3.org/2000/svg";
+const stage=document.getElementById("stage");
+const OX=450, OY=360, R=290;
+const D2R=Math.PI/180, R2D=180/Math.PI;
+
+function el(tag,attrs){const e=document.createElementNS(SVG,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);return e;}
+function lerpHex(a,b,t){
+  const pa=[parseInt(a.slice(1,3),16),parseInt(a.slice(3,5),16),parseInt(a.slice(5,7),16)];
+  const pb=[parseInt(b.slice(1,3),16),parseInt(b.slice(3,5),16),parseInt(b.slice(5,7),16)];
+  return "#"+pa.map((v,i)=>Math.round(v+(pb[i]-v)*t).toString(16).padStart(2,"0")).join("");
+}
+const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+function pt(r,deg){return {x:OX+r*Math.cos(deg*D2R), y:OY-r*Math.sin(deg*D2R)};}
+function arcPts(r,a0,a1,n){let s="";for(let i=0;i<=n;i++){const a=a0+(a1-a0)*i/n;const p=pt(r,a);s+=(i?" ":"")+p.x.toFixed(1)+","+p.y.toFixed(1);}return s;}
+
+function declination(day){return 23.45*Math.sin(2*Math.PI*(284+day)/365);}
+function solar(lat,day,time){
+  const dec=declination(day);
+  const H=15*(time-12);
+  const sinE=Math.sin(lat*D2R)*Math.sin(dec*D2R)+Math.cos(lat*D2R)*Math.cos(dec*D2R)*Math.cos(H*D2R);
+  const elev=Math.asin(clamp(sinE,-1,1))*R2D;
+  return {elev, zen:90-elev, dec};
+}
+
+// static scene
+const sky=el("rect",{x:0,y:0,width:900,height:OY,fill:"#CFE4F5"}); stage.appendChild(sky);
+const ground=el("rect",{x:0,y:OY,width:900,height:470-OY,fill:"#22303F"}); stage.appendChild(ground);
+stage.appendChild(el("polyline",{points:arcPts(R,0,180,60),fill:"none",stroke:"#ffffff","stroke-opacity":"0.5","stroke-width":"1.5"}));
+stage.appendChild(el("line",{x1:60,y1:OY,x2:840,y2:OY,stroke:"#e8eef7","stroke-width":"2"}));
+stage.appendChild(el("line",{x1:OX,y1:OY,x2:OX,y2:OY-R-6,stroke:"#9fb0c8","stroke-width":"1.5","stroke-dasharray":"6 5"}));
+stage.appendChild(el("text",{x:OX+10,y:OY-R-4,fill:"#e8eef7","font-size":"20","font-style":"italic"})).textContent="zenith (straight up)";
+const tSunrise=el("text",{x:70,y:OY+30,fill:"#cfe0f5","font-size":"19"}); tSunrise.textContent="East / sunrise"; stage.appendChild(tSunrise);
+const tSunset=el("text",{x:770,y:OY+30,fill:"#cfe0f5","font-size":"19","text-anchor":"end"}); tSunset.textContent="West / sunset"; stage.appendChild(tSunset);
+stage.appendChild(el("text",{x:OX,y:OY+52,fill:"#aebfda","font-size":"18","text-anchor":"middle","font-style":"italic"})).textContent="View: observer facing South";
+
+const sunPath=el("polyline",{points:"",fill:"none",stroke:"#E3A81C","stroke-opacity":"0.35","stroke-width":"2","stroke-dasharray":"3 4"}); stage.appendChild(sunPath);
+const zArc=el("polyline",{points:"",fill:"none",stroke:"#E3A81C","stroke-width":"3.5"}); stage.appendChild(zArc);
+const eArc=el("polyline",{points:"",fill:"none",stroke:"#1FA05A","stroke-width":"3.5"}); stage.appendChild(eArc);
+const ray=el("line",{x1:OX,y1:OY,x2:OX,y2:OY,stroke:"#16305B","stroke-width":"3"}); stage.appendChild(ray);
+const zLbl=el("text",{fill:"#B07A0E","font-size":"23","font-weight":"bold","text-anchor":"middle"}); zLbl.textContent="Z"; stage.appendChild(zLbl);
+const eLbl=el("text",{fill:"#1FA05A","font-size":"23","font-weight":"bold","text-anchor":"middle"}); eLbl.textContent="α"; stage.appendChild(eLbl);
+const glow=el("circle",{cx:OX,cy:OY,r:28,fill:"#E3A81C","fill-opacity":"0.25"}); stage.appendChild(glow);
+const sun=el("circle",{cx:OX,cy:OY,r:17,fill:"#E3A81C",stroke:"#F0C24B","stroke-width":"2.5"}); stage.appendChild(sun);
+const obs=el("circle",{cx:OX,cy:OY,r:6,fill:"#16305B"}); stage.appendChild(obs);
+
+// legend / key (drawn on top so text stays readable)
+(function(){
+  const bx=14,by=14,bw=180,bh=112;
+  stage.appendChild(el("rect",{x:bx,y:by,width:bw,height:bh,rx:10,fill:"#ffffff","fill-opacity":"0.9",stroke:"#DCE3EE","stroke-width":"1"}));
+  // stage.appendChild(el("text",{x:bx+16,y:by+26,fill:"#16305B","font-size":"16","font-weight":"bold"})).textContent="Legend";
+  const rows=[
+    ["#E3A81C","Zenith (Z)"],
+    ["#1FA05A","Elevation (\u03B1)"],
+    ["#5A6B85","Azimuth E \u2192 W"],
+  ];
+  rows.forEach((r,i)=>{
+    const yy=by+50+i*24;
+    stage.appendChild(el("line",{x1:bx+16,y1:yy-4,x2:bx+44,y2:yy-4,stroke:r[0],"stroke-width":"4"}));
+    stage.appendChild(el("text",{x:bx+52,y:yy,fill:"#1C2A3A","font-size":"15"})).textContent=r[1];
+  });
+})();
+
+let lat=13.1, day=80, time=12, playing=false, raf=null;
+const timeEl=document.getElementById("time"), latEl=document.getElementById("lat"), dayEl=document.getElementById("day");
+const timeV=document.getElementById("timeV"), latV=document.getElementById("latV"), dayV=document.getElementById("dayV");
+const rTime=document.getElementById("rTime"), rElev=document.getElementById("rElev"), rZen=document.getElementById("rZen"), rStatus=document.getElementById("rStatus");
+const playBtn=document.getElementById("play");
+
+function hhmm(t){const h=Math.floor(t),m=Math.round((t-h)*60);return String((h+24)%24).padStart(2,"0")+":"+String(m%60).padStart(2,"0");}
+function dayLabel(d){const dt=new Date(2025,0,1);dt.setDate(d);return dt.toLocaleString('en',{month:'short',day:'numeric'});}
+
+function fullPath(){
+  let s="",n=0;
+  for(let t=0;t<=24;t+=0.25){
+    const {elev}=solar(lat,day,t);
+    if(elev<0) continue;
+    const am=t<12; const polar=am?(180-elev):elev; const p=pt(R,polar);
+    s+=(n++?" ":"")+p.x.toFixed(1)+","+p.y.toFixed(1);
+  }
+  sunPath.setAttribute("points",s);
+}
+
+function render(){
+  const {elev,zen}=solar(lat,day,time);
+  const t=clamp((elev+6)/36,0,1);
+  sky.setAttribute("fill",lerpHex("#0E1F3D","#CFE4F5",t));
+  const dark=t<0.5;
+  tSunrise.setAttribute("fill",dark?"#8098bb":"#365b86");
+  tSunset.setAttribute("fill",dark?"#8098bb":"#365b86");
+
+  const am=time<12; let polar,sx,sy;
+  if(elev>=0){ polar=am?(180-elev):elev; const p=pt(R,polar); sx=p.x; sy=p.y; sun.setAttribute("fill-opacity","1"); glow.setAttribute("fill-opacity","0.25"); }
+  else { const x=am?150:750; sx=x; sy=OY+40+Math.min(60,-elev*1.5); polar=am?180:0; sun.setAttribute("fill-opacity","0.35"); glow.setAttribute("fill-opacity","0"); }
+
+  sun.setAttribute("cx",sx); sun.setAttribute("cy",sy);
+  glow.setAttribute("cx",sx); glow.setAttribute("cy",sy);
+  ray.setAttribute("x2",sx); ray.setAttribute("y2",sy);
+  ray.setAttribute("stroke-opacity", elev>=0?"1":"0.3");
+
+  if(elev>=0){
+    zArc.setAttribute("points",arcPts(78,90,polar,20));
+    eArc.setAttribute("points",arcPts(50,am?180:0,polar,16));
+    const zc=pt(100,(90+polar)/2); zLbl.setAttribute("x",zc.x); zLbl.setAttribute("y",zc.y);
+    const ec=pt(72,((am?180:0)+polar)/2); eLbl.setAttribute("x",ec.x); eLbl.setAttribute("y",ec.y+6);
+    zArc.style.opacity=eArc.style.opacity=zLbl.style.opacity=eLbl.style.opacity=1;
+  } else { zArc.style.opacity=eArc.style.opacity=zLbl.style.opacity=eLbl.style.opacity=0; }
+
+  rTime.textContent=hhmm(time);
+  rElev.innerHTML=elev.toFixed(1)+"&deg;";
+  rZen.innerHTML=zen.toFixed(1)+"&deg;";
+  let st,col;
+  if(elev>3){st="Day";col="#1E6B3A";}
+  else if(elev>-6){st="Twilight";col="#B07A0E";}
+  else {st="Night";col="#16305B";}
+  rStatus.textContent=st; rStatus.style.background=col+"22"; rStatus.style.color=col;
+  timeV.textContent=hhmm(time);
+}
+
+function refreshLabels(){ latV.innerHTML=Math.abs(lat).toFixed(1)+"&deg; "+(lat>=0?"N":"S"); dayV.textContent=dayLabel(day); }
+
+timeEl.addEventListener("input",e=>{time=+e.target.value; render();});
+latEl.addEventListener("input",e=>{lat=+e.target.value; refreshLabels(); fullPath(); render();});
+dayEl.addEventListener("input",e=>{day=+e.target.value; refreshLabels(); fullPath(); render();});
+
+let last=null;
+function loop(ts){
+  if(!playing) return;
+  if(last==null) last=ts;
+  const dt=(ts-last)/1000; last=ts;
+  time+=dt*2.2; if(time>=24) time-=24;
+  timeEl.value=time; render();
+  raf=requestAnimationFrame(loop);
+}
+playBtn.addEventListener("click",()=>{
+  playing=!playing;
+  playBtn.textContent=playing?"❚❚ Pause":"▶ Play";
+  if(playing){ last=null; raf=requestAnimationFrame(loop); }
+  else if(raf) cancelAnimationFrame(raf);
+});
+
+refreshLabels(); fullPath(); render();
+</script>
+</body>
+</html>
